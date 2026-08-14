@@ -8,12 +8,49 @@
 # Description: Build OpenWrt using GitHub Actions
 #
 ###############手动修改##############
-name: JDCloud-AX1800-Pro_AX6600-lede
+name: hanwckf-21.02_CLX-S20P
 
 on:
   repository_dispatch:
   workflow_dispatch:
     inputs:
+      REPO_BRANCH:
+        description: 'Select Source Branch'
+        required: true
+        default: 'v7672'
+        type: choice
+        options:
+        - v7672
+        - v7661
+      LAN_IP:
+        description: 'Set LAN IP Address'
+        required: true
+        default: '192.168.1.1'
+      WIFI_DRIVER:
+        description: 'Choose WiFi Driver'
+        required: true
+        default: 'v7.6.7.2-fw-20240823(recommend)'
+        type: choice
+        options:
+        - v7.6.7.2-fw-20240823(recommend)
+        - v7.6.6.1-fw-20230808(recommend)
+        - v7.6.7.2-fw-default
+        - v7.6.7.2-fw-20221208
+        - v7.6.7.2-fw-20230306
+        - v7.6.7.2-fw-20230421
+        - v7.6.7.2-fw-20230808
+        - v7.6.7.2-fw-20231024
+        - v7.6.6.1-fw-default
+        - v7.6.6.1-fw-20221208
+        - v7.6.6.1-fw-20230306
+        - v7.6.6.1-fw-20230421
+        - v7.6.6.1-fw-20231024
+        - v7.6.6.1-fw-20240823
+      APP_MTK:
+        description: 'Use luci-app-mtk wifi config'
+        required: true
+        default: false
+        type: boolean
       NO_DOCKERMAN:
         description: 'Not build luci-app-dockerman'
         required: true
@@ -29,14 +66,14 @@ on:
 env:
   ###############手动修改##############
   ##手动设置上传时候的打包名称和tag名称UPLOAD_TAG_NAME
-  OPENWRT_NAME: lede
-  UPLOAD_TAG_NAME: jdcloud-ax1800-pro_ax6600
-  REPO_URL: https://github.com/coolsnowwolf/lede
-  REPO_BRANCH: master
-  FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: JDCloud-AX1800-Pro_AX6600/.config
-  DIY_P1_SH: JDCloud-AX1800-Pro_AX6600/diy-part1.sh
-  DIY_P2_SH: JDCloud-AX1800-Pro_AX6600/diy-part2.sh
+  OPENWRT_NAME: hanwckf-21.02
+  UPLOAD_TAG_NAME: clx-s20p
+  REPO_URL: https://github.com/lgs2007m/immortalwrt-mt798x
+  REPO_BRANCH: ${{ github.event.inputs.REPO_BRANCH || 'v7672' }}
+  FEEDS_CONF: hanwckf-21.02/CLX-S20P/feeds.conf.default
+  CONFIG_FILE: hanwckf-21.02/CLX-S20P/.mtwifi-cfg.config
+  DIY_P1_SH: hanwckf-21.02/CLX-S20P/diy-part1.sh
+  DIY_P2_SH: hanwckf-21.02/CLX-S20P/diy-part2.sh
   SSH_ACTIONS: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
@@ -96,11 +133,9 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: 应用patch & 更新安装 feeds
+    - name: 更新 & 安装 feeds
       run: |
-        cp JDCloud-AX1800-Pro_AX6600/jdcloud-ax1800-pro_ax6600.patch openwrt/jdcloud-ax1800-pro_ax6600.patch
         cd openwrt
-        git apply jdcloud-ax1800-pro_ax6600.patch
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
@@ -110,6 +145,40 @@ jobs:
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
+
+    - name: 设置LAN IP地址（路由器登录地址）
+      run: |
+        cd openwrt
+        SET_IP=${{ github.event.inputs.LAN_IP }}
+        if [[ $SET_IP =~ ^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$ ]]; then
+            #修改immortalwrt.lan关联IP
+            sed -i "s/192\.168\.[0-9]*\.[0-9]*/$SET_IP/g" $(find feeds/luci/modules/luci-mod-system -type f -name "flash.js")
+            #修改默认IP地址
+            sed -i "s/192\.168\.[0-9]*\.[0-9]*/$SET_IP/g" package/base-files/files/bin/config_generate
+            echo "Set LAN IP Address: $SET_IP"
+        else
+            echo "Invalid IP address, use default."
+        fi
+
+    - name: 设置WiFi驱动版本
+      run: |
+        cd openwrt
+        wifi_driver=$(echo "${{ github.event.inputs.WIFI_DRIVER }}" | awk -F'[-]' '{print $1}')
+        firmware=$(echo "${{ github.event.inputs.WIFI_DRIVER }}" | awk -F'fw-' '{print $2}' | grep -oE '[0-9]{8}|default')
+        echo "Use WiFi Driver: $wifi_driver-fw-$firmware"
+        version_num=$(echo "$wifi_driver" | sed 's/v//;s/\.//g')
+        sed -i "s/^\(CONFIG_MTK_MT_WIFI_DRIVER_VERSION_\)[0-9]\{4\}/\1${version_num}/g" .config
+        [ "$firmware" == "default" ] && firmware="DEFAULT_FIRMWARE"
+        sed -i "s/^\(CONFIG_MTK_MT_WIFI_MT798[168]\)_[0-9]\{8\}=y/\1_${firmware}=y/g" .config
+
+    - name: 使用luci-app-mtk无线配置
+      if: github.event.inputs.APP_MTK == 'true'
+      run: |
+        cd openwrt
+        sed -i 's/CONFIG_PACKAGE_luci-app-mtwifi-cfg=y/CONFIG_PACKAGE_luci-app-mtk=y/g' .config
+        sed -i 's/CONFIG_PACKAGE_luci-i18n-mtwifi-cfg-zh-cn=y/CONFIG_PACKAGE_luci-i18n-mtk-zh-cn=y/g' .config
+        sed -i 's/CONFIG_PACKAGE_mtwifi-cfg=y/CONFIG_PACKAGE_wifi-profile=y/g' .config
+        sed -i 's/CONFIG_PACKAGE_lua-cjson=y/CONFIG_WIFI_NORMAL_SETTING=y/g' .config
 
     - name: 取消编译dockerman
       if: github.event.inputs.NO_DOCKERMAN == 'true'
@@ -139,8 +208,22 @@ jobs:
         cd openwrt
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 || make -j1 V=s
-        sed -nE 's/.*(192.168\.[0-9]+\.[0-9]+).*/\1/p' package/base-files/files/bin/config_generate | head -n 1 > IP_ADDR
+        sed -n 's/.*lan) ipad=${ipaddr:-"\([0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+\)"} ;;.*/\1/p' package/base-files/files/bin/config_generate | head -n 1 > IP_ADDR
         [ -s IP_ADDR ] && echo "IP_ADDR=$(cat IP_ADDR)" >> $GITHUB_ENV
+        WIFI_VERSION=$(sed -n 's/^CONFIG_MTK_MT_WIFI_DRIVER_VERSION_\([0-9]\+\)=y/\1/p' .config)
+        [ -n "$WIFI_VERSION" ] && echo "WIFI_VERSION=-v$WIFI_VERSION" >> $GITHUB_ENV
+        MT_WIFI_FW=$(sed -nE 's/^CONFIG_MTK_MT_WIFI_(MT798[168])_([0-9]{8})=y/\2/p' .config)
+        if [ -n "$MT_WIFI_FW" ]; then
+                echo "MT_WIFI_FW=-$MT_WIFI_FW" >> $GITHUB_ENV
+        else
+                grep -q 'CONFIG_MTK_MT_WIFI_MT798[168]_DEFAULT_FIRMWARE=y' .config && \
+                echo "MT_WIFI_FW=-default" >> $GITHUB_ENV
+        fi
+        if grep -q 'CONFIG_PACKAGE_mtwifi-cfg=y' .config; then
+                echo "WIFI_INTERFACE=-mtwifi" >> $GITHUB_ENV
+        else
+                echo "WIFI_INTERFACE=" >> $GITHUB_ENV
+        fi
         if grep -q 'CONFIG_PACKAGE_luci-app-dockerman=y' .config; then
                 echo "BUILD_DOCKERMAN=-docker" >> $GITHUB_ENV
         else
@@ -167,7 +250,7 @@ jobs:
                 for file in *"${val}"*; do
                         if [ -f "$file" ]; then
                                 suffix="${file#*${val}}"
-                                new_name="${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${val}${{ env.BUILD_DOCKERMAN }}${suffix}"
+                                new_name="${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${val}${{ env.WIFI_VERSION }}${{ env.BUILD_DOCKERMAN }}${suffix}"
                                 mv "$file" "$new_name"
                                 echo "  Renamed: $file -> $new_name"
                         fi
@@ -180,7 +263,7 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: ${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${{ env.UPLOAD_TAG_NAME }}${{ env.BUILD_DOCKERMAN }}
+        name: ${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${{ env.UPLOAD_TAG_NAME }}${{ env.WIFI_VERSION }}${{ env.BUILD_DOCKERMAN }}
         path: ${{ env.FIRMWARE }}
 
     - name: 生成固件Release标签
@@ -189,15 +272,20 @@ jobs:
       run: |
         touch release.txt
         echo "- 使用源码：${{ env.REPO_URL }}" >> release.txt
+        echo "- 使用分支：${{ env.REPO_BRANCH }}" >> release.txt
         echo "- 登录地址：${{ env.IP_ADDR }}" >> release.txt
-        echo "- 注意京东云AX1800-Pro亚瑟无线AX1800规格，5G无线不支持160MHz频宽" >> release.txt
-        echo "- 注意京东云AX6600雅典娜无线AX6600规格，5.8G无线不支持160MHz频宽" >> release.txt
+        echo "- 使用WiFi驱动: mt_wifi${{ env.WIFI_VERSION }}-fw${{ env.MT_WIFI_FW }}" >> release.txt
+        if [[ "${{ env.WIFI_INTERFACE }}" == '-mtwifi' ]]; then
+                echo "- 使用hanwckf mtwifi-cfg原生luci无线配置工具" >> release.txt
+        else
+                echo "- 使用mtk-sdk luci-app-mtk无线配置工具" >> release.txt
+        fi
         if [[ "${{ env.BUILD_DOCKERMAN }}" == '-docker' ]]; then
                 echo "- 已编译luci-app-dockerman" >> release.txt
         else
                 echo "- 未编译luci-app-dockerman" >> release.txt
         fi
-        echo "release_tag=${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${{ env.UPLOAD_TAG_NAME }}${{ env.BUILD_DOCKERMAN }}" >> $GITHUB_OUTPUT
+        echo "release_tag=${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${{ env.UPLOAD_TAG_NAME }}${{ env.WIFI_VERSION }}${{ env.BUILD_DOCKERMAN }}" >> $GITHUB_OUTPUT
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: 发布固件至Release
@@ -207,6 +295,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         files: ${{ env.FIRMWARE }}/*
-        name: ${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${{ env.UPLOAD_TAG_NAME }}${{ env.BUILD_DOCKERMAN }}
+        name: ${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${{ env.UPLOAD_TAG_NAME }}${{ env.WIFI_VERSION }}${{ env.BUILD_DOCKERMAN }}
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
